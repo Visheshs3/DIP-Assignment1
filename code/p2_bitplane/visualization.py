@@ -3,7 +3,19 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
-from starter import bit_planes, gray_encode, psnr, reconstruct
+from starter import (
+    bit_planes,
+    gray_encode, 
+    psnr, 
+    reconstruct, 
+    extract_lsb, 
+    embed_lsb,
+    embed_robust,
+    extract_robust,
+    degrade_gaussian,
+    degrade_jpeg,
+    ber
+    )
 
 
 def run_2_1(cover_path, out_dir):
@@ -104,3 +116,148 @@ def run_2_1(cover_path, out_dir):
   plt.close()
 
 
+def _bits_to_uint8(b):
+    val = 0
+    for bit in b:
+        val = (val << 1) | int(bit)
+    return val
+
+def run_2_2(textured_path, smooth_path, stego_path, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cover_textured = np.asarray(Image.open(textured_path)).astype(np.uint8)
+    cover_smooth = np.asarray(Image.open(smooth_path)).astype(np.uint8)
+    stego_img = np.asarray(Image.open(stego_path)).astype(np.uint8)
+
+    header = extract_lsb(stego_img, 24, plane=0)
+    sync = _bits_to_uint8(header[0:8])
+    h = _bits_to_uint8(header[8:16])
+    w = _bits_to_uint8(header[16:24])
+
+    # In 8-bit unsigned, a size of 256 overflows to 0
+    if h == 0:
+        h = 256
+    if w == 0:
+        w = 256
+
+    assert sync == 0b10101010, f'Sync mismatch! Got {sync:08b}, expected 10101010'
+
+    print(f'Payload Dimensions     : {h} x {w} pixels ({h * w} bits)')
+
+    total_bits = 24 + (h * w)
+    all_bits = extract_lsb(stego_img, total_bits, plane=0)
+    payload_bits = all_bits[24:]  
+
+    payload_img = (payload_bits.reshape((h, w)) * 255).astype(np.uint8)
+    Image.fromarray(payload_img).save(out_dir / 'recovered_payload.png')
+
+    p_textured = psnr(cover_textured, stego_img)
+    print(f'PSNR(cover_textured, stego): {p_textured:.2f} dB')
+
+    diff_map = (np.abs(stego_img.astype(np.int16) - cover_textured.astype(np.int16))* 255).astype(np.uint8)
+    Image.fromarray(diff_map).save(out_dir / 'difference_map.png')
+
+
+    stego_smooth = embed_lsb(cover_smooth, all_bits, plane=0)
+    p_smooth = psnr(cover_smooth, stego_smooth)
+    print(f'PSNR(cover_smooth, stego)  : {p_smooth:.2f} dB')
+
+    grad_textured = np.abs(np.diff(stego_img.astype(float), axis=1))
+    grad_smooth = np.abs(np.diff(stego_smooth.astype(float), axis=1))
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    axes[0].imshow(grad_textured, cmap='inferno', vmin=0, vmax=20)
+    axes[0].set_title(
+        'Textured Stego: Gradient Residual\n(Uniform texture masks the'
+        ' payload)',
+        fontsize=11,
+    )
+    axes[0].axis('off')
+
+    axes[1].imshow(grad_smooth, cmap='inferno', vmin=0, vmax=8)
+    axes[1].axhline(64, color='cyan', linestyle='--', linewidth=1.5)
+
+    axes[1].set_title(
+        'Smooth Stego: Gradient Residual\n(Glaring active band in rows 0–64)',
+        fontsize=11,
+    )
+    axes[1].axis('off')
+
+    plt.suptitle(
+        'Steganalysis Evidence: Spatial Gradient Residual',
+        fontsize=13,
+        fontweight='bold',
+    )
+    plt.tight_layout()
+    plt.savefig(
+        out_dir / 'textured_vs_smooth_evidence.png', dpi=300, bbox_inches='tight'
+    )
+    plt.close()
+
+
+def run_2_3(cover_path, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cover = np.asarray(Image.open(cover_path)).astype(np.uint8)
+
+    print("2.3 Channel Robustness (Gaussian & JPEG)")
+
+    # Deterministic 128 secret bits
+    rng = np.random.default_rng(42)
+    secret_bits = rng.integers(0, 2, size=128, dtype=np.uint8)
+
+    # Embed using both schemes
+    stego_rob = embed_robust(cover, secret_bits, delta=2)
+    stego_lsb = embed_lsb(cover, secret_bits, plane=0)
+
+    p_rob = psnr(cover, stego_rob)
+    p_lsb = psnr(cover, stego_lsb)
+    print(f"Robust Scheme Stego PSNR: {p_rob:.2f} dB (Constraint: >= 40 dB)")
+    print(f"Naive LSB Stego PSNR    : {p_lsb:.2f} dB")
+
+    sigmas = [0, 1, 2, 5, 10, 20]
+    ber_rob_gauss = []
+    ber_lsb_gauss = []
+
+    print("\nGaussian Noise Sweep")
+    print(f"{'Sigma':6s} | {'Robust BER':12s} | {'Naive LSB BER':14s}")
+
+    for s in sigmas:
+        deg_rob = degrade_gaussian(stego_rob, s)
+        rec_rob = extract_robust(deg_rob, cover, 128)
+        b_rob = ber(secret_bits, rec_rob)
+        ber_rob_gauss.append(b_rob)
+
+        deg_lsb = degrade_gaussian(stego_lsb, s, rng=np.random.default_rng(0))
+        rec_lsb = extract_lsb(deg_lsb, 128, plane=0)
+        b_lsb = ber(secret_bits, rec_lsb)
+        ber_lsb_gauss.append(b_lsb)
+
+        print(f"{s:<6d} | {b_rob:<12.4f} | {b_lsb:<14.4f}")
+
+    deg_rob_jpg = degrade_jpeg(stego_rob, 75)
+    rec_rob_jpg = extract_robust(deg_rob_jpg, cover, 128)
+    ber_rob_jpg = ber(secret_bits, rec_rob_jpg)
+
+    deg_lsb_jpg = degrade_jpeg(stego_lsb, 75)
+    rec_lsb_jpg = extract_lsb(deg_lsb_jpg, 128, plane=0)
+    ber_lsb_jpg = ber(secret_bits, rec_lsb_jpg)
+
+    print("\nJPEG Quality 75 Evaluation")
+    print(f"Robust Scheme JPEG BER : {ber_rob_jpg:.4f}")
+    print(f"Naive LSB JPEG BER     : {ber_lsb_jpg:.4f}")
+
+    plt.figure(figsize=(7, 5))
+    plt.plot(sigmas, ber_rob_gauss, "o-", linewidth=2, color="blue", label="Block-Mean Robust Scheme")
+    plt.plot(sigmas, ber_lsb_gauss, "s--", linewidth=2, color="red", label="Naive LSB (Plane 0)")
+    plt.title("Bit Error Rate (BER) vs. Gaussian Noise ", fontsize=12, fontweight="bold")
+    plt.xlabel("Noise Standard Deviation ", fontsize=11)
+    plt.ylabel("Bit Error Rate (BER)", fontsize=11)
+    plt.xticks(sigmas)
+    plt.grid(True, linestyle=":", alpha=0.6)
+    plt.legend(frameon=True)
+    plt.tight_layout()
+    plt.savefig(out_dir / "ber_vs_sigma.png", dpi=300, bbox_inches="tight")
+    plt.close()

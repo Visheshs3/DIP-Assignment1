@@ -31,7 +31,7 @@ def embed_lsb(cover, bits, plane=0):
     flat = out.ravel()
     n = len(bits)
     
-    mask = np.uint8(~(1 << plane))
+    mask = np.uint8(255 ^ (1 << plane))
     
     flat[:n] = (flat[:n] & mask) | ((bits.astype(np.uint8) & 1) << plane)
     return out
@@ -42,15 +42,44 @@ def extract_lsb(stego, n, plane=0):
     return ((flat[:n] >> plane)&1).astype(np.uint8)
 
 
-def embed_robust(cover, bits, **kw):
-    """TODO 2.3: your design. Must carry 128 bits at PSNR(cover,stego) >= 40 dB
-    and survive the channels below. Document your parameters."""
-    raise NotImplementedError
+def embed_robust(cover, bits, delta=2):
+    stego = cover.astype(np.float64).copy()
+    H, W = cover.shape  # 1024, 1024
+    h_block = H // 16  # 64 rows
+    w_block = W // 8  # 128 cols
+
+    bit_idx = 0
+    for i in range(16):
+        for j in range(8):
+            if bit_idx >= len(bits):
+                break
+                # Add +delta for bit 1, subtract -delta for bit 0
+            shift = delta if bits[bit_idx] == 1 else -delta
+            stego[i * h_block : (i + 1) * h_block, j * w_block : (j + 1) * w_block] += shift
+            bit_idx += 1
+
+    return np.clip(np.round(stego), 0, 255).astype(np.uint8)
 
 
-def extract_robust(stego, cover, n, **kw):
-    """TODO 2.3: matching extractor."""
-    raise NotImplementedError
+def extract_robust(stego, cover, n=128, **kw):
+
+    diff = stego.astype(np.float64) - cover.astype(np.float64)
+    H, W = cover.shape
+    h_block = H // 16  # 64
+    w_block = W // 8  # 128
+
+    bits = []
+    bit_idx = 0
+    for i in range(16):
+        for j in range(8):
+            if bit_idx >= n:
+                break
+            block = diff[i * h_block : (i + 1) * h_block, j * w_block : (j + 1) * w_block]
+
+            bits.append(1 if np.mean(block) > 0 else 0)
+            bit_idx += 1
+
+    return np.array(bits, dtype=np.uint8)
 
 
 # ---- provided channels: do not modify, these are what you are graded against
@@ -79,8 +108,13 @@ def psnr(a, b, peak=255.0):
 
 
 if __name__ == '__main__':
-  from visualization import run_2_1
+  from visualization import run_2_1, run_2_2, run_2_3
+
   root = Path(__file__).resolve().parents[2]
   cover_path = root / 'images/p2/cover_textured.png'
+  smooth_path = root / 'images/p2/cover_smooth.png'
+  stego_path = root / 'images/p2/decode_me.png'
   out_dir = root / 'output/p2'
   run_2_1(cover_path, out_dir)
+  run_2_2(cover_path, smooth_path, stego_path, out_dir)
+  run_2_3(cover_path, out_dir)
