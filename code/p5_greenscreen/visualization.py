@@ -294,7 +294,7 @@ def run_5_3():
     raw_alphas.append(alpha)
     bg_crops.append(bg_crop)
 
-  roi_static = (slice(480, 560), slice(420, 480))
+  roi_static = (slice(440, 540), slice(590, 690))
 
   flicker_before = np.mean([
       np.mean(
