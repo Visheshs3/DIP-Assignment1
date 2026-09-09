@@ -155,39 +155,43 @@ def run_2_2(textured_path, smooth_path, stego_path, out_dir):
     p_textured = psnr(cover_textured, stego_img)
     print(f'PSNR(cover_textured, stego): {p_textured:.2f} dB')
 
-    diff_map = (np.abs(stego_img.astype(np.int16) - cover_textured.astype(np.int16))* 255).astype(np.uint8)
-    Image.fromarray(diff_map).save(out_dir / 'difference_map.png')
+    diff_map = (np.abs(stego_img.astype(np.int16) - cover_textured.astype(np.int16)) * 255).astype(np.uint8)
+    Image.fromarray(diff_map).save(out_dir / "difference_map.png")
 
+    # Embed payload of at least 256 x 256 bits into plane 4 of both covers
+    req_bits = 256 * 256
+    repeats = int(np.ceil(req_bits / len(payload_bits)))
+    test_payload = np.tile(payload_bits, repeats)[:req_bits]
 
-    stego_smooth = embed_lsb(cover_smooth, all_bits, plane=0)
-    p_smooth = psnr(cover_smooth, stego_smooth)
-    print(f'PSNR(cover_smooth, stego)  : {p_smooth:.2f} dB')
+    stego_tex_p4 = embed_lsb(cover_textured, test_payload, plane=3)
+    stego_sm_p4 = embed_lsb(cover_smooth, test_payload, plane=3)
 
-    grad_textured = np.abs(np.diff(stego_img.astype(float), axis=1))
-    grad_smooth = np.abs(np.diff(stego_smooth.astype(float), axis=1))
+    p_tex_p4 = psnr(cover_textured, stego_tex_p4)
+    p_sm_p4 = psnr(cover_smooth, stego_sm_p4)
+    print(f"PSNR(cover_textured, plane3): {p_tex_p4:.2f} dB")
+    print(f"PSNR(cover_smooth, plane3)  : {p_sm_p4:.2f} dB")
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-    axes[0].imshow(grad_textured, cmap='inferno', vmin=0, vmax=20)
+    axes[0].imshow(stego_tex_p4, cmap="gray")
     axes[0].set_title(
-        'Textured Stego: Gradient Residual\n(Uniform texture masks the'
-        ' payload)',
+        f"Textured Cover (Plane 3 Embedded)\nPSNR = {p_tex_p4:.2f} dB (Texture"
+        " masks artifacts)",
         fontsize=11,
     )
     axes[0].axis('off')
 
-    axes[1].imshow(grad_smooth, cmap='inferno', vmin=0, vmax=8)
-    axes[1].axhline(64, color='cyan', linestyle='--', linewidth=1.5)
-
+    axes[1].imshow(stego_sm_p4, cmap="gray")
     axes[1].set_title(
-        'Smooth Stego: Gradient Residual\n(Glaring active band in rows 0–64)',
+        f"Smooth Cover (Plane 3 Embedded)\nPSNR = {p_sm_p4:.2f} dB (Severe"
+        " contouring artifacts)",
         fontsize=11,
     )
     axes[1].axis('off')
 
     plt.suptitle(
-        'Steganalysis Evidence: Spatial Gradient Residual',
+        "Steganalysis Evidence: Plane 3 Embedding (256x256 bits)",
         fontsize=13,
-        fontweight='bold',
+        fontweight="bold",
     )
     plt.tight_layout()
     plt.savefig(

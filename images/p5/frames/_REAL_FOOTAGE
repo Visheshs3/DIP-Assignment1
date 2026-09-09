@@ -1,0 +1,5 @@
+source: /home/visheshsinghal/dip/DIP_Assignment_1/images/p5/green_screen.mp4
+window: frames 144..191
+fractional alpha: nan%
+backing chroma std: nan
+Delete this file to let build_assets.py regenerate synthetic frames again.
